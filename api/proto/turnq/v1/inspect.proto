@@ -1,0 +1,182 @@
+syntax = "proto3";
+
+package turnq.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "turnq/v1/types.proto";
+
+option go_package = "github.com/turnq/turnq/gen/go/turnq/v1;turnqv1";
+
+// InspectService is the observability plane: find, explain, replay.
+service InspectService {
+  rpc GetMessage(GetMessageRequest) returns (Message) {
+    option (google.api.http) = {get: "/v1/messages/{id}"};
+  }
+
+  rpc GetTimeline(GetTimelineRequest) returns (GetTimelineResponse) {
+    option (google.api.http) = {get: "/v1/messages/{id}/timeline"};
+  }
+
+  // "Why is this message not moving?" (see docs/design/02-data-model.md)
+  rpc Explain(ExplainRequest) returns (ExplainResponse) {
+    option (google.api.http) = {get: "/v1/messages/{id}/explain"};
+  }
+
+  rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse) {
+    option (google.api.http) = {
+      post: "/v1/messages:search"
+      body: "*"
+    };
+  }
+
+  // Replay one message, or every message matching a filter, as new attempts.
+  // Long-running: returns an operation id; progress via GetOperation.
+  rpc Replay(ReplayRequest) returns (Operation) {
+    option (google.api.http) = {
+      post: "/v1/messages:replay"
+      body: "*"
+    };
+  }
+
+  // Move DEAD messages of a queue (optionally filtered) back to READY.
+  rpc Redrive(RedriveRequest) returns (Operation) {
+    option (google.api.http) = {
+      post: "/v1/queues/{queue}/dead:redrive"
+      body: "*"
+    };
+  }
+
+  rpc GetOperation(GetOperationRequest) returns (Operation) {
+    option (google.api.http) = {get: "/v1/operations/{id}"};
+  }
+
+  rpc GetQueueStats(GetQueueStatsRequest) returns (QueueStats) {
+    option (google.api.http) = {get: "/v1/queues/{queue}/stats"};
+  }
+
+  rpc ListTenantStats(ListTenantStatsRequest) returns (ListTenantStatsResponse) {
+    option (google.api.http) = {get: "/v1/queues/{queue}/tenants"};
+  }
+}
+
+message GetMessageRequest {
+  string id = 1;
+  bool include_payload = 2;
+}
+
+message GetTimelineRequest {
+  string id = 1;
+}
+message GetTimelineResponse {
+  Message message = 1;
+  repeated Event events = 2;
+}
+
+message ExplainRequest {
+  string id = 1;
+}
+message ExplainResponse {
+  MessageState state = 1;
+  // Ordered, most significant first. Machine-readable code + human text.
+  repeated Reason reasons = 2;
+  message Reason {
+    string code = 1;   // NO_CONSUMERS | ORDERING_KEY_BLOCKED | KEY_LIMIT | TENANT_CAP |
+                       // RATE_LIMITED | QUEUE_PAUSED | CIRCUIT_OPEN | SCHEDULED |
+                       // RETRY_BACKOFF | LEASED | SUSPECTED_CONSUMER_CRASH | QUOTA
+    string text = 2;   // "Waiting behind msg_01… holding ordering key user:42 (attempt 5/8)"
+    repeated Detail details = 3;
+    google.protobuf.Timestamp until = 4; // when this reason is expected to clear, if known
+  }
+}
+
+message SearchMessagesRequest {
+  string queue = 1;                       // required unless id/idempotency_key given
+  repeated MessageState states = 2;
+  string tenant = 3;
+  string idempotency_key = 4;
+  google.protobuf.Timestamp created_after = 5;
+  google.protobuf.Timestamp created_before = 6;
+  // Indexed-field equality: {"$.order_id": "9912"}
+  map<string, string> fields = 7;
+  // CEL over `message`, `headers`, `payload` (bounded scan).
+  // e.g. payload.amount > 1000 && headers["region"] == "eu"
+  string filter = 8;
+  uint32 page_size = 9;                   // default 50, max 500
+  string page_token = 10;
+  bool include_payload = 11;
+}
+message SearchMessagesResponse {
+  repeated Message messages = 1;
+  string next_page_token = 2;
+  uint64 scanned = 3;                     // messages examined (filter cost visibility)
+  bool scan_budget_exhausted = 4;         // resume with next_page_token
+}
+
+message ReplayRequest {
+  oneof target {
+    string id = 1;
+    SearchMessagesRequest filter = 2;
+  }
+  string to_queue = 3;                    // default: original queue
+  bool reset_attempts = 4;                // default true
+  google.protobuf.Duration spread = 5;    // stagger replays over this window
+  bool dry_run = 6;                       // returns count only
+}
+
+message RedriveRequest {
+  string queue = 1;
+  string filter = 2;                      // optional CEL
+  google.protobuf.Duration spread = 3;
+  uint32 limit = 4;
+  bool dry_run = 5;
+}
+
+message GetOperationRequest {
+  string id = 1;
+}
+
+message Operation {
+  string id = 1;
+  string kind = 2;                        // replay | redrive | purge | migrate
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_RUNNING = 1;
+    STATUS_SUCCEEDED = 2;
+    STATUS_FAILED = 3;
+    STATUS_CANCELLED = 4;
+  }
+  Status status = 3;
+  uint64 matched = 4;
+  uint64 processed = 5;
+  string error = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+}
+
+message GetQueueStatsRequest {
+  string queue = 1;
+}
+
+message ListTenantStatsRequest {
+  string queue = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+  string order_by = 4;                    // ready | in_flight | oldest_age | share_deficit
+}
+message ListTenantStatsResponse {
+  repeated TenantStats tenants = 1;
+  string next_page_token = 2;
+}
+message TenantStats {
+  string tenant = 1;
+  uint32 weight = 2;
+  uint64 ready = 3;
+  uint32 in_flight = 4;
+  uint32 max_in_flight = 5;
+  google.protobuf.Duration oldest_ready_age = 6;
+  double delivered_share = 7;             // actual fraction of deliveries, 5m
+  double fair_share = 8;                  // weight / sum(active weights)
+  string parked_reason = 9;
+}

@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package turnq.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "turnq/v1/types.proto";
+
+option go_package = "github.com/turnq/turnq/gen/go/turnq/v1;turnqv1";
+
+// AdminService is the control plane. Every resource is declaratively upsertable
+// (PUT semantics) so `turnq apply -f turnq.yaml` and GitOps work.
+service AdminService {
+  // Queues
+  rpc PutQueue(PutQueueRequest) returns (Queue) {
+    option (google.api.http) = {
+      put: "/v1/queues/{queue.name}"
+      body: "queue"
+    };
+  }
+  rpc GetQueue(GetQueueRequest) returns (Queue) {
+    option (google.api.http) = {get: "/v1/queues/{name}"};
+  }
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse) {
+    option (google.api.http) = {get: "/v1/queues"};
+  }
+  rpc DeleteQueue(DeleteQueueRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/v1/queues/{name}"};
+  }
+  rpc PauseQueue(PauseQueueRequest) returns (Queue) {
+    option (google.api.http) = {
+      post: "/v1/queues/{name}:pause"
+      body: "*"
+    };
+  }
+  rpc ResumeQueue(ResumeQueueRequest) returns (Queue) {
+    option (google.api.http) = {
+      post: "/v1/queues/{name}:resume"
+      body: "*"
+    };
+  }
+  rpc PurgeQueue(PurgeQueueRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/v1/queues/{name}:purge"
+      body: "*"
+    };
+  }
+
+  // Topics & subscriptions
+  rpc PutTopic(PutTopicRequest) returns (Topic) {
+    option (google.api.http) = {
+      put: "/v1/topics/{topic.name}"
+      body: "topic"
+    };
+  }
+  rpc PutSubscription(PutSubscriptionRequest) returns (Subscription) {
+    option (google.api.http) = {
+      put: "/v1/topics/{subscription.topic}/subscriptions/{subscription.name}"
+      body: "subscription"
+    };
+  }
+  rpc DeleteSubscription(DeleteSubscriptionRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/v1/topics/{topic}/subscriptions/{name}"};
+  }
+
+  // Schedules (cron)
+  rpc PutSchedule(PutScheduleRequest) returns (Schedule) {
+    option (google.api.http) = {
+      put: "/v1/schedules/{schedule.name}"
+      body: "schedule"
+    };
+  }
+  rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse) {
+    option (google.api.http) = {get: "/v1/schedules"};
+  }
+  rpc TriggerSchedule(TriggerScheduleRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/v1/schedules/{name}:trigger"
+      body: "*"
+    };
+  }
+  rpc DeleteSchedule(DeleteScheduleRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/v1/schedules/{name}"};
+  }
+
+  // Tenants
+  rpc PutTenant(PutTenantRequest) returns (Tenant) {
+    option (google.api.http) = {
+      put: "/v1/tenants/{tenant.name}"
+      body: "tenant"
+    };
+  }
+  rpc PurgeTenant(PurgeTenantRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/v1/tenants/{name}:purge"
+      body: "*"
+    };
+  }
+
+  // Push endpoints
+  rpc PutPushEndpoint(PutPushEndpointRequest) returns (PushEndpoint) {
+    option (google.api.http) = {
+      put: "/v1/push-endpoints/{endpoint.name}"
+      body: "endpoint"
+    };
+  }
+  rpc RotatePushSecret(RotatePushSecretRequest) returns (RotatePushSecretResponse) {
+    option (google.api.http) = {
+      post: "/v1/push-endpoints/{name}:rotate-secret"
+      body: "*"
+    };
+  }
+  rpc GetPushEndpointHealth(GetPushEndpointHealthRequest) returns (PushEndpointHealth) {
+    option (google.api.http) = {get: "/v1/push-endpoints/{name}/health"};
+  }
+
+  // API keys
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (CreateAPIKeyResponse) {
+    option (google.api.http) = {
+      post: "/v1/api-keys"
+      body: "*"
+    };
+  }
+  rpc RevokeAPIKey(RevokeAPIKeyRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/v1/api-keys/{id}"};
+  }
+}
+
+message PutQueueRequest {
+  Queue queue = 1;
+  google.protobuf.FieldMask update_mask = 2; // empty = replace
+}
+message GetQueueRequest {
+  string name = 1;
+}
+message ListQueuesRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+  string prefix = 3;
+}
+message ListQueuesResponse {
+  repeated Queue queues = 1;
+  repeated QueueStats stats = 2;
+  string next_page_token = 3;
+}
+message DeleteQueueRequest {
+  string name = 1;
+  bool force = 2; // required if non-terminal messages exist
+}
+message PauseQueueRequest {
+  string name = 1;
+}
+message ResumeQueueRequest {
+  string name = 1;
+}
+message PurgeQueueRequest {
+  string name = 1;
+  repeated MessageState states = 2; // default: ready, scheduled, retrying
+}
+
+message PutTopicRequest {
+  Topic topic = 1;
+}
+message PutSubscriptionRequest {
+  Subscription subscription = 1;
+  bool create_queue = 2;
+}
+message DeleteSubscriptionRequest {
+  string topic = 1;
+  string name = 2;
+}
+
+message PutScheduleRequest {
+  Schedule schedule = 1;
+}
+message ListSchedulesRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+}
+message ListSchedulesResponse {
+  repeated Schedule schedules = 1;
+  string next_page_token = 2;
+}
+message TriggerScheduleRequest {
+  string name = 1;
+}
+message DeleteScheduleRequest {
+  string name = 1;
+}
+
+message PutTenantRequest {
+  Tenant tenant = 1;
+}
+message PurgeTenantRequest {
+  string name = 1;
+  bool include_history = 2;
+}
+
+message PutPushEndpointRequest {
+  PushEndpoint endpoint = 1;
+}
+message RotatePushSecretRequest {
+  string name = 1;
+  bool keep_previous = 2; // overlap window: both signatures sent until next rotate
+}
+message RotatePushSecretResponse {
+  string secret = 1; // shown once
+}
+message GetPushEndpointHealthRequest {
+  string name = 1;
+}
+message PushEndpointHealth {
+  string name = 1;
+  string circuit_state = 2; // closed | open | half_open
+  google.protobuf.Timestamp circuit_until = 3;
+  double success_rate_1m = 4;
+  double success_rate_1h = 5;
+  double p50_ms = 6;
+  double p99_ms = 7;
+  map<string, uint64> status_counts_1h = 8; // "2xx": 900, "503": 12, "timeout": 3
+  uint32 in_flight = 9;
+  repeated RecentDelivery recent = 10;
+  message RecentDelivery {
+    string message_id = 1;
+    uint32 attempt = 2;
+    int32 http_status = 3;
+    double latency_ms = 4;
+    string error = 5;
+    google.protobuf.Timestamp at = 6;
+  }
+}
+
+message CreateAPIKeyRequest {
+  string name = 1;
+  // Scopes: "publish", "consume", "inspect", "admin", "payload:read"
+  repeated string scopes = 2;
+  repeated string queues = 3;   // glob, e.g. "emails.*"; empty = all
+  repeated string tenants = 4;  // tenant-scoped key; empty = all
+  google.protobuf.Timestamp expires_at = 5;
+}
+message CreateAPIKeyResponse {
+  string id = 1;
+  string key = 2; // "tq_live_..." shown once; stored as argon2id hash
+}
+message RevokeAPIKeyRequest {
+  string id = 1;
+}

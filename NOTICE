@@ -1,0 +1,10 @@
+turnq
+Copyright 2026 The turnq Authors
+
+This product includes software developed by the turnq project
+(https://github.com/turnq/turnq).
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party components bundled in binary distributions are listed, with their
+licenses, in THIRD_PARTY_NOTICES (generated at release time).

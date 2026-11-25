@@ -1,0 +1,22 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/turnq/turnq/gen/go
+  disable:
+    - module: buf.build/googleapis/googleapis
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/connectrpc/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/bufbuild/es
+    out: sdk/node/src/gen
+    opt: target=ts
+  - remote: buf.build/protocolbuffers/python
+    out: sdk/python/src/turnq/_gen
+  - remote: buf.build/protocolbuffers/pyi
+    out: sdk/python/src/turnq/_gen

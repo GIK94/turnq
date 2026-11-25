@@ -1,0 +1,270 @@
+syntax = "proto3";
+
+package turnq.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/turnq/turnq/gen/go/turnq/v1;turnqv1";
+
+// ---------- Messages ----------
+
+enum MessageState {
+  MESSAGE_STATE_UNSPECIFIED = 0;
+  MESSAGE_STATE_SCHEDULED = 1;
+  MESSAGE_STATE_READY = 2;
+  MESSAGE_STATE_LEASED = 3;
+  MESSAGE_STATE_RETRYING = 4;
+  MESSAGE_STATE_SUCCEEDED = 5;
+  MESSAGE_STATE_DEAD = 6;
+  MESSAGE_STATE_EXPIRED = 7;
+  MESSAGE_STATE_CANCELLED = 8;
+}
+
+message MessageError {
+  string code = 1;      // app-defined, e.g. "SMTP_421" or "HTTP_503"
+  string message = 2;   // truncated to 4 KiB
+  string consumer_id = 3;
+  google.protobuf.Timestamp at = 4;
+  int32 http_status = 5; // push delivery only
+}
+
+message Message {
+  string id = 1;                       // "msg_" + UUIDv7 base32
+  string queue = 2;
+  string tenant = 3;
+  bytes payload = 4;                   // omitted in list views unless requested
+  map<string, string> headers = 5;
+  string idempotency_key = 6;
+  string ordering_key = 7;
+  uint32 priority = 8;                 // 0..9, higher first (within tenant)
+  MessageState state = 9;
+  uint32 attempt = 10;
+  uint32 max_attempts = 11;
+  google.protobuf.Timestamp available_at = 12;
+  google.protobuf.Timestamp expires_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  MessageError last_error = 16;
+  uint32 redrive_count = 17;
+  Source source = 18;
+  LeaseInfo lease = 19;                // set when state == LEASED
+  uint32 cost = 20;                    // fairness cost units, default 1
+}
+
+message Source {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_PUBLISH = 1;
+    KIND_TOPIC = 2;
+    KIND_SCHEDULE = 3;
+    KIND_REPLAY = 4;
+  }
+  Kind kind = 1;
+  string ref = 2; // topic name, schedule name, or original message id
+}
+
+message LeaseInfo {
+  string consumer_id = 1;
+  google.protobuf.Timestamp leased_at = 2;
+  google.protobuf.Timestamp deadline = 3;
+  google.protobuf.Timestamp last_heartbeat = 4;
+}
+
+// A message handed to a consumer.
+message Delivery {
+  Message message = 1;           // payload always included
+  string lease_token = 2;        // required for Ack/Nack/Extend
+  google.protobuf.Timestamp lease_deadline = 3;
+}
+
+// ---------- Timeline ----------
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_PUBLISHED = 1;
+  EVENT_TYPE_DEDUPLICATED = 2;
+  EVENT_TYPE_BECAME_READY = 3;
+  EVENT_TYPE_LEASED = 4;
+  EVENT_TYPE_EXTENDED = 5;
+  EVENT_TYPE_ACKED = 6;
+  EVENT_TYPE_NACKED = 7;
+  EVENT_TYPE_LEASE_EXPIRED = 8;
+  EVENT_TYPE_RETRY_SCHEDULED = 9;
+  EVENT_TYPE_DEAD_LETTERED = 10;
+  EVENT_TYPE_EXPIRED = 11;
+  EVENT_TYPE_CANCELLED = 12;
+  EVENT_TYPE_REPLAYED = 13;
+  EVENT_TYPE_PUSH_ATTEMPT = 14;
+}
+
+message Event {
+  google.protobuf.Timestamp at = 1;
+  EventType type = 2;
+  uint32 attempt = 3;
+  string consumer_id = 4;
+  MessageError error = 5;
+  google.protobuf.Timestamp next_at = 6;    // retry_scheduled
+  google.protobuf.Duration duration = 7;    // ack/nack: time since lease
+  map<string, string> attrs = 8;            // e.g. http_status, response_snippet, actor
+}
+
+// ---------- Policies ----------
+
+message Backoff {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_FIXED = 1;
+    TYPE_EXPONENTIAL = 2;
+  }
+  enum Jitter {
+    JITTER_UNSPECIFIED = 0;
+    JITTER_NONE = 1;
+    JITTER_FULL = 2;
+    JITTER_EQUAL = 3;
+  }
+  Type type = 1;
+  google.protobuf.Duration initial = 2;
+  google.protobuf.Duration max = 3;
+  double multiplier = 4;
+  Jitter jitter = 5;
+}
+
+message RetryPolicy {
+  uint32 max_attempts = 1;
+  Backoff backoff = 2;
+}
+
+message RateLimit {
+  double per_second = 1;
+  uint32 burst = 2;
+}
+
+message KeyLimit {
+  // "tenant", "header:<name>", or "payload:<jsonpath>"
+  string key_from = 1;
+  uint32 max_in_flight = 2;
+  RateLimit rate = 3;
+}
+
+message Queue {
+  string name = 1;
+  RetryPolicy retry = 2;
+  google.protobuf.Duration lease_default = 3;
+  google.protobuf.Duration lease_max = 4;
+  string dead_letter_forward_to = 5;
+  google.protobuf.Duration dedup_window = 6;
+  uint32 max_payload_bytes = 7;
+  Retention retention = 8;
+  enum Ordering {
+    ORDERING_UNSPECIFIED = 0;
+    ORDERING_NONE = 1;
+    ORDERING_PER_KEY = 2;
+  }
+  Ordering ordering = 9;
+  RateLimit rate_limit = 10;
+  repeated KeyLimit key_limits = 11;
+  uint32 default_tenant_weight = 12;
+  repeated string indexed_fields = 13; // JSONPath, max 8
+  uint32 partitions = 14;
+  bool paused = 15;
+  google.protobuf.Timestamp created_at = 16;
+}
+
+message Retention {
+  google.protobuf.Duration succeeded = 1;
+  google.protobuf.Duration dead = 2;
+  enum Timeline {
+    TIMELINE_UNSPECIFIED = 0;
+    TIMELINE_FULL = 1;
+    TIMELINE_FAILURES = 2;
+    TIMELINE_OFF = 3;
+  }
+  Timeline timeline = 3;
+}
+
+message QueueStats {
+  string queue = 1;
+  map<string, uint64> count_by_state = 2;   // "ready" -> 120 ...
+  google.protobuf.Duration oldest_ready_age = 3;
+  double publish_rate = 4;                  // msg/s, 1m avg
+  double ack_rate = 5;
+  double nack_rate = 6;
+  uint32 consumers = 7;
+  uint32 active_tenants = 8;
+}
+
+message Tenant {
+  string name = 1;
+  uint32 weight = 2;
+  uint32 max_in_flight = 3;
+  RateLimit publish_rate = 4;
+  RateLimit deliver_rate = 5;
+  uint64 max_queued = 6;
+  uint64 max_bytes = 7;
+}
+
+message Topic {
+  string name = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message Subscription {
+  string name = 1;
+  string topic = 2;
+  string queue = 3;        // destination queue (auto-created if missing)
+  string filter = 4;       // CEL expression over `headers` and `payload`
+}
+
+message Schedule {
+  string name = 1;
+  string cron = 2;
+  string timezone = 3;     // IANA, default UTC
+  string queue = 4;        // exactly one of queue/topic
+  string topic = 5;
+  bytes payload = 6;
+  map<string, string> headers = 7;
+  string tenant = 8;
+  enum Misfire {
+    MISFIRE_UNSPECIFIED = 0;
+    MISFIRE_SKIP = 1;
+    MISFIRE_FIRE_ONCE = 2;
+    MISFIRE_FIRE_ALL = 3;
+  }
+  Misfire misfire = 9;
+  bool skip_if_running = 10;
+  bool paused = 11;
+  google.protobuf.Timestamp next_fire_at = 12;   // output only
+  google.protobuf.Timestamp last_fire_at = 13;   // output only
+}
+
+message PushEndpoint {
+  string name = 1;
+  string queue = 2;
+  string url = 3;
+  google.protobuf.Duration timeout = 4;
+  uint32 max_concurrency = 5;
+  RateLimit rate = 6;
+  map<string, string> headers = 7;
+  bool envelope = 8;
+  repeated int32 fail_on_status = 9;
+  CircuitBreaker circuit = 10;
+  bool allow_private_networks = 11;
+  bool disabled = 12;
+  string disabled_reason = 13;   // output only
+  string secret = 14;            // input only on create/rotate; never returned
+}
+
+message CircuitBreaker {
+  double failure_ratio = 1;
+  uint32 min_requests = 2;
+  google.protobuf.Duration window = 3;
+  google.protobuf.Duration open_for = 4;
+}
+
+// Free-form JSON for search results / explain details.
+message Detail {
+  string key = 1;
+  google.protobuf.Value value = 2;
+}

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & help
+    url: https://github.com/turnq/turnq/discussions/categories/q-a
+    about: Ask usage questions in Discussions
+  - name: Ideas
+    url: https://github.com/turnq/turnq/discussions/categories/ideas
+    about: Early-stage ideas before they become feature requests
+  - name: Security vulnerability
+    url: https://github.com/turnq/turnq/security/advisories/new
+    about: Report security issues privately, never as public issues

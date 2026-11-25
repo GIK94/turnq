@@ -1,0 +1,208 @@
+syntax = "proto3";
+
+package turnq.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "turnq/v1/types.proto";
+
+option go_package = "github.com/turnq/turnq/gen/go/turnq/v1;turnqv1";
+
+// BrokerService is the data plane: publish, consume, settle.
+service BrokerService {
+  rpc Publish(PublishRequest) returns (PublishResponse) {
+    option (google.api.http) = {
+      post: "/v1/queues/{queue}/messages"
+      body: "*"
+    };
+  }
+
+  rpc PublishBatch(PublishBatchRequest) returns (PublishBatchResponse) {
+    option (google.api.http) = {
+      post: "/v1/queues/{queue}/messages:batch"
+      body: "*"
+    };
+  }
+
+  rpc PublishTopic(PublishTopicRequest) returns (PublishTopicResponse) {
+    option (google.api.http) = {
+      post: "/v1/topics/{topic}/messages"
+      body: "*"
+    };
+  }
+
+  // Long-poll lease (REST-friendly). wait up to `wait` for messages.
+  rpc Lease(LeaseRequest) returns (LeaseResponse) {
+    option (google.api.http) = {
+      post: "/v1/queues/{queue}/leases"
+      body: "*"
+    };
+  }
+
+  // Bidirectional streaming consume with credit-based flow control.
+  // Client sends Start, then Credit/Ack/Nack/Extend frames; server sends Deliveries.
+  rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse);
+
+  rpc Ack(AckRequest) returns (AckResponse) {
+    option (google.api.http) = {
+      post: "/v1/leases/{lease_token}:ack"
+      body: "*"
+    };
+  }
+
+  rpc Nack(NackRequest) returns (NackResponse) {
+    option (google.api.http) = {
+      post: "/v1/leases/{lease_token}:nack"
+      body: "*"
+    };
+  }
+
+  rpc Extend(ExtendRequest) returns (ExtendResponse) {
+    option (google.api.http) = {
+      post: "/v1/leases/{lease_token}:extend"
+      body: "*"
+    };
+  }
+
+  rpc Cancel(CancelRequest) returns (CancelResponse) {
+    option (google.api.http) = {
+      post: "/v1/messages/{id}:cancel"
+      body: "*"
+    };
+  }
+}
+
+message PublishOptions {
+  string tenant = 1;
+  string idempotency_key = 2;
+  string ordering_key = 3;
+  uint32 priority = 4;
+  oneof when {
+    google.protobuf.Duration delay = 5;
+    google.protobuf.Timestamp available_at = 6;
+  }
+  google.protobuf.Duration ttl = 7;
+  uint32 max_attempts = 8;
+  uint32 cost = 9;
+  map<string, string> headers = 10;
+}
+
+message PublishRequest {
+  string queue = 1;
+  bytes payload = 2;        // REST: use `json` instead for JSON bodies
+  PublishOptions options = 3;
+  // Convenience for REST: a JSON payload object (stored as application/json).
+  // Exactly one of payload/json may be set.
+  google.protobuf.Value json = 4;
+}
+
+message PublishResponse {
+  string id = 1;
+  bool duplicate = 2;       // true if idempotency_key matched an existing message
+  MessageState state = 3;
+}
+
+message PublishBatchRequest {
+  string queue = 1;
+  repeated PublishRequest messages = 2; // `queue` on items is ignored
+  bool atomic = 3;                      // all-or-nothing (same shard guaranteed)
+}
+
+message PublishBatchResponse {
+  repeated PublishResponse results = 1;
+}
+
+message PublishTopicRequest {
+  string topic = 1;
+  bytes payload = 2;
+  PublishOptions options = 3;
+}
+
+message PublishTopicResponse {
+  repeated PublishResponse results = 1; // one per matching subscription
+}
+
+message LeaseRequest {
+  string queue = 1;
+  uint32 max_messages = 2;               // default 1, max 100
+  google.protobuf.Duration wait = 3;     // long-poll, max 20s
+  google.protobuf.Duration lease = 4;    // default queue lease_default
+  string consumer_id = 5;
+  string tenant = 6;                     // optional: only this tenant (bypasses DRR)
+}
+
+message LeaseResponse {
+  repeated Delivery deliveries = 1;
+}
+
+message ConsumeRequest {
+  oneof frame {
+    Start start = 1;
+    Credit credit = 2;
+    AckRequest ack = 3;
+    NackRequest nack = 4;
+    ExtendRequest extend = 5;
+  }
+  message Start {
+    string queue = 1;
+    string consumer_id = 2;
+    uint32 credits = 3;                  // max unacked deliveries outstanding
+    google.protobuf.Duration lease = 4;
+    string tenant = 5;
+  }
+  message Credit {
+    uint32 add = 1;
+  }
+}
+
+message ConsumeResponse {
+  oneof frame {
+    Delivery delivery = 1;
+    SettleResult settle = 2;             // result of an inline ack/nack/extend
+    Heartbeat heartbeat = 3;             // server keepalive every 15s
+  }
+  message SettleResult {
+    string lease_token = 1;
+    bool ok = 2;
+    string error_code = 3;               // e.g. LEASE_EXPIRED
+    google.protobuf.Timestamp new_deadline = 4;
+  }
+  message Heartbeat {}
+}
+
+message AckRequest {
+  string lease_token = 1;
+}
+message AckResponse {}
+
+message NackRequest {
+  string lease_token = 1;
+  MessageError error = 2;
+  // Override backoff for this retry. Zero = queue policy.
+  google.protobuf.Duration retry_after = 3;
+  // Do not retry; go straight to DEAD.
+  bool permanent = 4;
+  // Return to READY without counting an attempt (e.g. graceful shutdown).
+  bool release = 5;
+}
+message NackResponse {
+  MessageState state = 1;
+  google.protobuf.Timestamp next_at = 2;
+}
+
+message ExtendRequest {
+  string lease_token = 1;
+  google.protobuf.Duration by = 2;
+}
+message ExtendResponse {
+  google.protobuf.Timestamp deadline = 1;
+}
+
+message CancelRequest {
+  string id = 1;
+}
+message CancelResponse {
+  MessageState state = 1;
+}

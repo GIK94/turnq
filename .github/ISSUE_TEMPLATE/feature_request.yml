@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Big changes (API, semantics, disk format) will need an RFC. This issue is the place to discuss whether one is worth writing.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what makes it hard today? Coming from RabbitMQ/BullMQ/SQS? Tell us how you did it there.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API sketch, config, or UI. Optional, but helpful.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / workarounds considered
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on this?
+      options:
+        - "Yes"
+        - "Maybe, with guidance"
+        - "No"

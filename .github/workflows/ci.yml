@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # nightly: long sim, crash, jepsen
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proto:
+    # Needs buf.lock (run `buf dep update` once and commit it).
+    if: ${{ hashFiles('buf.lock') != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@v1
+        with:
+          lint: true
+          format: false
+          breaking: ${{ github.event_name == 'pull_request' }}
+          breaking_against: ${{ github.event.repository.clone_url }}#branch=main
+          push: false
+
+  go:
+    # Skips cleanly until the Go module exists.
+    if: ${{ hashFiles('go.mod') != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Lint
+        if: matrix.os == 'ubuntu-latest'
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62.2
+      - name: Unit tests
+        run: go test -race -shuffle=on -count=1 ./...
+        env:
+          CGO_ENABLED: "1"
+      - name: Simulation (short)
+        if: matrix.os == 'ubuntu-latest' && github.event_name != 'schedule'
+        run: go test ./internal/sim -run TestSimulation -count=1 -seeds=200
+      - name: govulncheck
+        if: matrix.os == 'ubuntu-latest'
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+
+  integration:
+    if: ${{ hashFiles('go.mod') != '' }}
+    needs: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: "**/pnpm-lock.yaml"
+      - uses: astral-sh/setup-uv@v4
+      - run: make integration
+
+  nightly:
+    if: ${{ github.event_name == 'schedule' && hashFiles('go.mod') != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sim, crash, jepsen, fuzz]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run ${{ matrix.suite }}
+        run: make ${{ matrix.suite }} SEEDS=50000
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suite }}-failure
+          path: |
+            test/**/out/
+            internal/sim/testdata/failing-seeds.txt
+
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit
+        run: |
+          missing=$(git log --format='%H %s%n%b' origin/${{ github.base_ref }}..HEAD \
+            | awk '/^[0-9a-f]{40} /{sha=$1; ok[sha]=0} /^Signed-off-by: /{ok[sha]=1} END{for (s in ok) if (!ok[s]) print s}')
+          if [ -n "$missing" ]; then
+            echo "Commits missing DCO sign-off (use git commit -s):"; echo "$missing"; exit 1
+          fi
